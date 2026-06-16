@@ -1,0 +1,39 @@
+# 📜 REGOLAMENTO — FANTA TEMPTATION ISLAND
+
+## Obiettivo
+Costruisci la tua squadra di coppie e accumula più punti possibile
+in base a quello che succede in trasmissione. Sfida gli amici nella
+classifica generale o nelle leghe private.
+
+## Le coppie
+- Nel gioco ci sono 7 coppie totali.
+- Ogni utente sceglie una rosa di 5 coppie.
+
+## Titolari e riserve
+- Delle tue 5 coppie, ad ogni puntata ne schieri 3 (i titolari).
+- Le altre 2 restano in panchina (riserve).
+
+## Come si fanno i punti
+- Solo le 3 coppie che schieri in una puntata fanno punti in quella puntata.
+- I punti arrivano dagli eventi che l'amministratore assegna alle coppie
+  (es. bacio, lite, falò anticipato, abbandono...).
+- Puoi cambiare i 3 titolari prima di ogni nuova puntata.
+
+## Eliminazioni e riserve
+- Una coppia può essere eliminata dal gioco.
+- Una coppia eliminata non può più essere schierata: al suo posto
+  schieri una delle tue riserve nella puntata successiva.
+- Conta solo ciò che la coppia fa nelle puntate in cui l'hai
+  effettivamente schierata: la riserva che subentra porta punti solo
+  dal momento in cui la metti in campo.
+- Nella puntata "E poi.." tutte le coppie sono disponibili.
+
+## Leghe
+- Puoi creare una lega e invitare gli amici con un codice.
+- Chi ha il codice può unirsi alla lega.
+- Ogni lega ha la sua classifica privata, oltre alla classifica generale.
+
+## Punteggio finale
+- Vince chi totalizza più punti sommando tutte le puntate.
+
+Buon divertimento! 🔥
