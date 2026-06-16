@@ -1,0 +1,30 @@
+📂 CARTELLA FOTO COPPIE
+=======================
+
+Metti qui dentro le foto delle coppie.
+
+REGOLA DEL NOME FILE
+--------------------
+Il nome del file = nome della coppia in minuscolo, senza accenti e
+simboli, con gli spazi (e la &) sostituiti da underscore (_).
+Estensioni ammesse: .jpg  .jpeg  .png  .webp
+
+L'app abbina la foto da sola, non devi configurare nulla nel database.
+
+NOMI FILE PER LE COPPIE DI ESEMPIO
+----------------------------------
+Sabrina & Giovanni       ->  sabrina_giovanni.jpg
+Francesca & Danilo       ->  francesca_danilo.jpg
+Soraya & Cristian        ->  andrea_valentina.jpg
+Bernadette & Diamante    ->  bernadette_diamante.jpg
+Sara & Gabriele          ->  sara_gabriele.jpg
+Alessandra & Rosario     ->  alessandra_rosario.jpg
+Iris & Andrea            ->  iris_andrea.jpg
+
+NUOVE COPPIE
+------------
+Quando aggiungi una coppia dall'Area Admin, sotto al campo del nome
+l'app ti mostra ESATTAMENTE come chiamare il file della foto.
+Nella lista "Coppie esistenti" vedi anche se la foto è presente (🖼️) o manca (⛔).
+
+Se la foto manca, al posto dell'immagine compare l'emoji 💑.
