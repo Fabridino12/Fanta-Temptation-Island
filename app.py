@@ -62,19 +62,29 @@ def mostra_foto(nome, width=90):
 # =========================
 # DB HELPERS
 # =========================
+@st.cache_resource
+def get_pool():
+    """Connessione persistente riusata tra i clic (non riapre TCP ogni volta)."""
+    return psycopg2.connect(st.secrets["SUPABASE_DB_URL"])
+
+
 def get_connection():
-    conn = psycopg2.connect(st.secrets["SUPABASE_DB_URL"])
+    conn = get_pool()
+    # Se la connessione è caduta (timeout Supabase), la ricrea
+    try:
+        conn.cursor().execute("SELECT 1")
+    except Exception:
+        st.cache_resource.clear()
+        conn = get_pool()
     return conn
 
 
 def query(sql, params=(), one=False):
     conn = get_connection()
-    try:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-    finally:
-        conn.close()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    cur.close()
     if one:
         return rows[0] if rows else None
     return rows
@@ -82,12 +92,10 @@ def query(sql, params=(), one=False):
 
 def execute(sql, params=()):
     conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(sql, params)
-        conn.commit()
-    finally:
-        conn.close()
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    conn.commit()
+    cur.close()
 
 
 # =========================
