@@ -99,7 +99,14 @@ def init_schema():
     execute("ALTER TABLE eventi_coppie ADD COLUMN IF NOT EXISTS quantita INTEGER DEFAULT 1")
 
 
-init_schema()
+@st.cache_resource
+def _init_schema_once():
+    try:
+        init_schema()
+    except Exception:
+        pass
+
+_init_schema_once()
 
 
 def get_impostazione(chiave, default=None):
@@ -614,122 +621,125 @@ elif st.session_state.page == "my_team":
     if not user:
         st.warning("Devi effettuare il login.")
         st.stop()
+    try:
+        st.title("⚽ La mia squadra")
+        squadra = get_squadra_by_user(user["id"])
 
-    st.title("⚽ La mia squadra")
-    squadra = get_squadra_by_user(user["id"])
-
-    # --- Crea squadra ---
-    if not squadra:
-        st.info("Non hai ancora una squadra. Creala qui sotto.")
-        nome = st.text_input("Nome della squadra")
-        if st.button("Crea squadra"):
-            if nome.strip():
-                create_squadra(user["id"], nome.strip())
-                st.success("Squadra creata!")
-                st.rerun()
-            else:
-                st.error("Inserisci un nome.")
-        st.stop()
-
-    st.subheader(f"🏆 {squadra['nome_squadra']}")
-    st.metric("Punteggio totale", f"{punteggio_squadra(squadra['id'])} punti")
-
-    dett = dettaglio_punteggio(squadra["id"])
-    if dett:
-        with st.expander("📊 Come ho fatto i punti (dettaglio per puntata)"):
-            st.caption("Contano solo i punti delle coppie nella puntata in cui le hai schierate.")
-            puntata_corr = None
-            for r in dett:
-                if r["puntata"] != puntata_corr:
-                    puntata_corr = r["puntata"]
-                    st.markdown(f"**📺 Puntata {puntata_corr}**")
-                st.write(f"• {r['coppia']}: **{r['punti']}** punti")
-    else:
-        st.caption("Non hai ancora schierato nessuna coppia: schiera i titolari per fare punti.")
-    st.divider()
-
-    # --- ROSA: scelta delle coppie ---
-    st.subheader(f"💑 La tua rosa ({COPPIE_PER_SQUADRA} coppie)")
-    tutte = get_coppie(solo_attive=True)
-    nome_to_id = {c["nome"]: c["id"] for c in tutte}
-    rosa_attuale = [c["nome"] for c in get_rosa(squadra["id"])]
-
-    rosa_lock, deadline_rosa = rosa_bloccata()
-    if deadline_rosa and not rosa_lock:
-        components.html(countdown_html(deadline_rosa, "⏳ Chiusura mercato tra"), height=56)
-
-    if rosa_lock:
-        st.error(f"⛔ Mercato chiuso il {deadline_rosa.strftime('%d/%m/%Y %H:%M')}: la rosa non è più modificabile.")
-    else:
-        scelte = st.multiselect(
-            f"Scegli {COPPIE_PER_SQUADRA} coppie",
-            options=list(nome_to_id.keys()),
-            default=[n for n in rosa_attuale if n in nome_to_id],
-            max_selections=COPPIE_PER_SQUADRA,
-        )
-        if st.button("💾 Salva rosa"):
-            if rosa_bloccata()[0]:
-                st.error("⛔ Mercato appena chiuso: rosa non più modificabile.")
-            elif len(scelte) != COPPIE_PER_SQUADRA:
-                st.error(f"Devi scegliere esattamente {COPPIE_PER_SQUADRA} coppie.")
-            else:
-                set_rosa(squadra["id"], [nome_to_id[n] for n in scelte])
-                st.success("Rosa salvata!")
-                st.rerun()
-
-    # mostra rosa con foto
-    rosa = get_rosa(squadra["id"])
-    if rosa:
-        cols = st.columns(len(rosa))
-        for col, c in zip(cols, rosa):
-            with col:
-                mostra_foto(c["nome"], width=90)
-                etichetta = "❌ eliminata" if c["eliminata"] else f"{punti_coppia_totali(c['id'])} pt"
-                st.caption(f"**{c['nome']}**\n\n{etichetta}")
-
-    st.divider()
-
-    # --- SCHIERAMENTO per la puntata aperta ---
-    st.subheader("🎯 Schiera i titolari")
-    puntata = get_puntata_aperta()
-
-    if not puntata:
-        st.warning("Nessuna puntata aperta: non puoi ancora schierare.")
-    elif not rosa:
-        st.info("Prima scegli la tua rosa di coppie qui sopra.")
-    else:
-        st.write(f"📺 **Puntata {puntata['numero']}** — schiera {TITOLARI_PER_PUNTATA} coppie (non eliminate).")
-        schierabili = {c["nome"]: c["id"] for c in rosa if not c["eliminata"]}
-        gia_schierati = [c["nome"] for c in get_schieramento(squadra["id"], puntata["id"]) if c["nome"] in schierabili]
-
-        if formazione_bloccata():
-            st.error("🔴 Formazione bloccata (fascia diretta): non puoi cambiare i titolari ora.")
-            components.html(
-                countdown_html(prossimo_sblocco(), "🔓 Formazione modificabile di nuovo tra", "#7f1d1d"),
-                height=56,
-            )
-            if gia_schierati:
-                st.write("I tuoi titolari per questa puntata:")
-                for n in gia_schierati:
-                    st.write(f"• {n}")
-            else:
-                st.caption("Non avevi schierato titolari per questa puntata.")
-        else:
-            titolari = st.multiselect(
-                "Titolari di questa puntata",
-                options=list(schierabili.keys()),
-                default=gia_schierati,
-                max_selections=TITOLARI_PER_PUNTATA,
-            )
-            if st.button("✅ Conferma schieramento"):
-                if formazione_bloccata():
-                    st.error("🔴 Formazione appena bloccata (fascia diretta): riprova più tardi.")
-                elif len(titolari) != TITOLARI_PER_PUNTATA:
-                    st.error(f"Devi schierare esattamente {TITOLARI_PER_PUNTATA} coppie.")
-                else:
-                    set_schieramento(squadra["id"], puntata["id"], [schierabili[n] for n in titolari])
-                    st.success("Schieramento confermato!")
+        # --- Crea squadra ---
+        if not squadra:
+            st.info("Non hai ancora una squadra. Creala qui sotto.")
+            nome = st.text_input("Nome della squadra")
+            if st.button("Crea squadra"):
+                if nome.strip():
+                    create_squadra(user["id"], nome.strip())
+                    st.success("Squadra creata!")
                     st.rerun()
+                else:
+                    st.error("Inserisci un nome.")
+            st.stop()
+
+        st.subheader(f"🏆 {squadra['nome_squadra']}")
+        st.metric("Punteggio totale", f"{punteggio_squadra(squadra['id'])} punti")
+
+        dett = dettaglio_punteggio(squadra["id"])
+        if dett:
+            with st.expander("📊 Come ho fatto i punti (dettaglio per puntata)"):
+                st.caption("Contano solo i punti delle coppie nella puntata in cui le hai schierate.")
+                puntata_corr = None
+                for r in dett:
+                    if r["puntata"] != puntata_corr:
+                        puntata_corr = r["puntata"]
+                        st.markdown(f"**📺 Puntata {puntata_corr}**")
+                    st.write(f"• {r['coppia']}: **{r['punti']}** punti")
+        else:
+            st.caption("Non hai ancora schierato nessuna coppia: schiera i titolari per fare punti.")
+        st.divider()
+
+        # --- ROSA: scelta delle coppie ---
+        st.subheader(f"💑 La tua rosa ({COPPIE_PER_SQUADRA} coppie)")
+        tutte = get_coppie(solo_attive=True)
+        nome_to_id = {c["nome"]: c["id"] for c in tutte}
+        rosa_attuale = [c["nome"] for c in get_rosa(squadra["id"])]
+
+        rosa_lock, deadline_rosa = rosa_bloccata()
+        if deadline_rosa and not rosa_lock:
+            components.html(countdown_html(deadline_rosa, "⏳ Chiusura mercato tra"), height=56)
+
+        if rosa_lock:
+            st.error(f"⛔ Mercato chiuso il {deadline_rosa.strftime('%d/%m/%Y %H:%M')}: la rosa non è più modificabile.")
+        else:
+            scelte = st.multiselect(
+                f"Scegli {COPPIE_PER_SQUADRA} coppie",
+                options=list(nome_to_id.keys()),
+                default=[n for n in rosa_attuale if n in nome_to_id],
+                max_selections=COPPIE_PER_SQUADRA,
+            )
+            if st.button("💾 Salva rosa"):
+                if rosa_bloccata()[0]:
+                    st.error("⛔ Mercato appena chiuso: rosa non più modificabile.")
+                elif len(scelte) != COPPIE_PER_SQUADRA:
+                    st.error(f"Devi scegliere esattamente {COPPIE_PER_SQUADRA} coppie.")
+                else:
+                    set_rosa(squadra["id"], [nome_to_id[n] for n in scelte])
+                    st.success("Rosa salvata!")
+                    st.rerun()
+
+        # mostra rosa con foto
+        rosa = get_rosa(squadra["id"])
+        if rosa:
+            cols = st.columns(len(rosa))
+            for col, c in zip(cols, rosa):
+                with col:
+                    mostra_foto(c["nome"], width=90)
+                    etichetta = "❌ eliminata" if c["eliminata"] else f"{punti_coppia_totali(c['id'])} pt"
+                    st.caption(f"**{c['nome']}**\n\n{etichetta}")
+
+        st.divider()
+
+        # --- SCHIERAMENTO per la puntata aperta ---
+        st.subheader("🎯 Schiera i titolari")
+        puntata = get_puntata_aperta()
+
+        if not puntata:
+            st.warning("Nessuna puntata aperta: non puoi ancora schierare.")
+        elif not rosa:
+            st.info("Prima scegli la tua rosa di coppie qui sopra.")
+        else:
+            st.write(f"📺 **Puntata {puntata['numero']}** — schiera {TITOLARI_PER_PUNTATA} coppie (non eliminate).")
+            schierabili = {c["nome"]: c["id"] for c in rosa if not c["eliminata"]}
+            gia_schierati = [c["nome"] for c in get_schieramento(squadra["id"], puntata["id"]) if c["nome"] in schierabili]
+
+            if formazione_bloccata():
+                st.error("🔴 Formazione bloccata (fascia diretta): non puoi cambiare i titolari ora.")
+                components.html(
+                    countdown_html(prossimo_sblocco(), "🔓 Formazione modificabile di nuovo tra", "#7f1d1d"),
+                    height=56,
+                )
+                if gia_schierati:
+                    st.write("I tuoi titolari per questa puntata:")
+                    for n in gia_schierati:
+                        st.write(f"• {n}")
+                else:
+                    st.caption("Non avevi schierato titolari per questa puntata.")
+            else:
+                titolari = st.multiselect(
+                    "Titolari di questa puntata",
+                    options=list(schierabili.keys()),
+                    default=gia_schierati,
+                    max_selections=TITOLARI_PER_PUNTATA,
+                )
+                if st.button("✅ Conferma schieramento"):
+                    if formazione_bloccata():
+                        st.error("🔴 Formazione appena bloccata (fascia diretta): riprova più tardi.")
+                    elif len(titolari) != TITOLARI_PER_PUNTATA:
+                        st.error(f"Devi schierare esattamente {TITOLARI_PER_PUNTATA} coppie.")
+                    else:
+                        set_schieramento(squadra["id"], puntata["id"], [schierabili[n] for n in titolari])
+                        st.success("Schieramento confermato!")
+                        st.rerun()
+    except Exception as e:
+        st.error("⚠️ Errore di connessione al database. Riprova tra qualche secondo.")
+        st.caption(f"Dettaglio: {e}")
 
 
 # =========================
