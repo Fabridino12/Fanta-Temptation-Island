@@ -548,6 +548,8 @@ if user:
         st.rerun()
 else:
     st.sidebar.info("Effettua il login per giocare.")
+    if st.sidebar.button("🏠 Home / Login"):
+        st.session_state.page = "home"
     if st.sidebar.button("📜 Regolamento"):
         st.session_state.page = "rules"
 
