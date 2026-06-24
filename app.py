@@ -148,6 +148,11 @@ def get_lock_hours():
 
 def formazione_bloccata():
     """True se ora siamo nella fascia 'diretta' in cui la formazione è congelata."""
+    forzata = get_impostazione("formazione_forzata", "0")
+    if forzata == "1":
+        return True
+    if forzata == "-1":
+        return False
     start, end = get_lock_hours()
     if start == end:
         return False
@@ -175,16 +180,11 @@ def countdown_html(target_dt, label="⏳ Tempo rimasto:", bg="#1f2937"):
          padding:10px;border-radius:8px;background:{bg};color:#fff;text-align:center;"></div>
     <script>
     const target = new Date("{target}").getTime();
-    let reloaded = false;
     function tick() {{
         const el = document.getElementById("cd");
         const diff = target - new Date().getTime();
         if (diff <= 0) {{
-            el.innerHTML = "⏰ Aggiorno...";
-            if (!reloaded) {{
-                reloaded = true;
-                setTimeout(function() {{ try {{ window.parent.location.reload(); }} catch (e) {{}} }}, 1500);
-            }}
+            el.innerHTML = "⏰ Tempo scaduto — aggiorna la pagina per vedere i cambiamenti.";
             return;
         }}
         const g = Math.floor(diff / 86400000);
@@ -319,6 +319,61 @@ def set_schieramento(squadra_id, puntata_id, coppia_ids):
         conn.commit()
     finally:
         conn.close()
+
+
+def auto_schieramento(squadra_id, puntata_id):
+    """Riempie/ripulisce lo schieramento: rimuove coppie eliminate o uscite dalla rosa,
+    poi porta i titolari a TITOLARI_PER_PUNTATA con le coppie disponibili."""
+    rosa = get_rosa(squadra_id)
+    disponibili_ids = [c["id"] for c in rosa if not c["eliminata"]]
+    schierati_attuali = get_schieramento(squadra_id, puntata_id)
+    schierati_ids = {c["id"] for c in schierati_attuali}
+
+    disponibili_set = set(disponibili_ids)
+    da_rimuovere = [cid for cid in schierati_ids if cid not in disponibili_set]
+    validi = schierati_ids - set(da_rimuovere)
+    mancanti = TITOLARI_PER_PUNTATA - len(validi)
+    da_aggiungere = [cid for cid in disponibili_ids if cid not in validi][:max(0, mancanti)]
+
+    if not da_rimuovere and not da_aggiungere:
+        return
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        for cid in da_rimuovere:
+            cur.execute(
+                "DELETE FROM schieramenti WHERE squadra_id=%s AND puntata_id=%s AND coppia_id=%s",
+                (squadra_id, puntata_id, cid),
+            )
+        for cid in da_aggiungere:
+            cur.execute(
+                "INSERT INTO schieramenti (squadra_id, puntata_id, coppia_id) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                (squadra_id, puntata_id, cid),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def auto_fill_tutte_squadre(puntata_id):
+    """Assegna una formazione di default a tutte le squadre con una rosa."""
+    squadre = query("SELECT id FROM squadre")
+    for s in squadre:
+        auto_schieramento(s["id"], puntata_id)
+
+
+def aggiorna_schieramenti_per_eliminazione(coppia_id):
+    """Dopo aver eliminato una coppia, ripulisce e riempie gli schieramenti della puntata aperta."""
+    puntata = get_puntata_aperta()
+    if not puntata:
+        return
+    squadre_colpite = query(
+        "SELECT squadra_id FROM schieramenti WHERE coppia_id = %s AND puntata_id = %s",
+        (coppia_id, puntata["id"]),
+    )
+    for s in squadre_colpite:
+        auto_schieramento(s["squadra_id"], puntata["id"])
 
 
 # =========================
@@ -638,107 +693,112 @@ elif st.session_state.page == "my_team":
                     st.rerun()
                 else:
                     st.error("Inserisci un nome.")
-            st.stop()
-
-        st.subheader(f"🏆 {squadra['nome_squadra']}")
-        st.metric("Punteggio totale", f"{punteggio_squadra(squadra['id'])} punti")
-
-        dett = dettaglio_punteggio(squadra["id"])
-        if dett:
-            with st.expander("📊 Come ho fatto i punti (dettaglio per puntata)"):
-                st.caption("Contano solo i punti delle coppie nella puntata in cui le hai schierate.")
-                puntata_corr = None
-                for r in dett:
-                    if r["puntata"] != puntata_corr:
-                        puntata_corr = r["puntata"]
-                        st.markdown(f"**📺 Puntata {puntata_corr}**")
-                    st.write(f"• {r['coppia']}: **{r['punti']}** punti")
         else:
-            st.caption("Non hai ancora schierato nessuna coppia: schiera i titolari per fare punti.")
-        st.divider()
+            st.subheader(f"🏆 {squadra['nome_squadra']}")
+            st.metric("Punteggio totale", f"{punteggio_squadra(squadra['id'])} punti")
 
-        # --- ROSA: scelta delle coppie ---
-        st.subheader(f"💑 La tua rosa ({COPPIE_PER_SQUADRA} coppie)")
-        tutte = get_coppie(solo_attive=True)
-        nome_to_id = {c["nome"]: c["id"] for c in tutte}
-        rosa_attuale = [c["nome"] for c in get_rosa(squadra["id"])]
-
-        rosa_lock, deadline_rosa = rosa_bloccata()
-        if deadline_rosa and not rosa_lock:
-            components.html(countdown_html(deadline_rosa, "⏳ Chiusura mercato tra"), height=56)
-
-        if rosa_lock:
-            st.error(f"⛔ Mercato chiuso il {deadline_rosa.strftime('%d/%m/%Y %H:%M')}: la rosa non è più modificabile.")
-        else:
-            scelte = st.multiselect(
-                f"Scegli {COPPIE_PER_SQUADRA} coppie",
-                options=list(nome_to_id.keys()),
-                default=[n for n in rosa_attuale if n in nome_to_id],
-                max_selections=COPPIE_PER_SQUADRA,
-            )
-            if st.button("💾 Salva rosa"):
-                if rosa_bloccata()[0]:
-                    st.error("⛔ Mercato appena chiuso: rosa non più modificabile.")
-                elif len(scelte) != COPPIE_PER_SQUADRA:
-                    st.error(f"Devi scegliere esattamente {COPPIE_PER_SQUADRA} coppie.")
-                else:
-                    set_rosa(squadra["id"], [nome_to_id[n] for n in scelte])
-                    st.success("Rosa salvata!")
-                    st.rerun()
-
-        # mostra rosa con foto
-        rosa = get_rosa(squadra["id"])
-        if rosa:
-            cols = st.columns(len(rosa))
-            for col, c in zip(cols, rosa):
-                with col:
-                    mostra_foto(c["nome"], width=90)
-                    etichetta = "❌ eliminata" if c["eliminata"] else f"{punti_coppia_totali(c['id'])} pt"
-                    st.caption(f"**{c['nome']}**\n\n{etichetta}")
-
-        st.divider()
-
-        # --- SCHIERAMENTO per la puntata aperta ---
-        st.subheader("🎯 Schiera i titolari")
-        puntata = get_puntata_aperta()
-
-        if not puntata:
-            st.warning("Nessuna puntata aperta: non puoi ancora schierare.")
-        elif not rosa:
-            st.info("Prima scegli la tua rosa di coppie qui sopra.")
-        else:
-            st.write(f"📺 **Puntata {puntata['numero']}** — schiera {TITOLARI_PER_PUNTATA} coppie (non eliminate).")
-            schierabili = {c["nome"]: c["id"] for c in rosa if not c["eliminata"]}
-            gia_schierati = [c["nome"] for c in get_schieramento(squadra["id"], puntata["id"]) if c["nome"] in schierabili]
-
-            if formazione_bloccata():
-                st.error("🔴 Formazione bloccata (fascia diretta): non puoi cambiare i titolari ora.")
-                components.html(
-                    countdown_html(prossimo_sblocco(), "🔓 Formazione modificabile di nuovo tra", "#7f1d1d"),
-                    height=56,
-                )
-                if gia_schierati:
-                    st.write("I tuoi titolari per questa puntata:")
-                    for n in gia_schierati:
-                        st.write(f"• {n}")
-                else:
-                    st.caption("Non avevi schierato titolari per questa puntata.")
+            dett = dettaglio_punteggio(squadra["id"])
+            if dett:
+                with st.expander("📊 Come ho fatto i punti (dettaglio per puntata)"):
+                    st.caption("Contano solo i punti delle coppie nella puntata in cui le hai schierate.")
+                    puntata_corr = None
+                    for r in dett:
+                        if r["puntata"] != puntata_corr:
+                            puntata_corr = r["puntata"]
+                            st.markdown(f"**📺 Puntata {puntata_corr}**")
+                        st.write(f"• {r['coppia']}: **{r['punti']}** punti")
             else:
-                titolari = st.multiselect(
-                    "Titolari di questa puntata",
-                    options=list(schierabili.keys()),
-                    default=gia_schierati,
-                    max_selections=TITOLARI_PER_PUNTATA,
+                st.caption("Non hai ancora schierato nessuna coppia: schiera i titolari per fare punti.")
+            st.divider()
+
+            # --- ROSA: scelta delle coppie ---
+            st.subheader(f"💑 La tua rosa ({COPPIE_PER_SQUADRA} coppie)")
+            tutte = get_coppie(solo_attive=True)
+            nome_to_id = {c["nome"]: c["id"] for c in tutte}
+            rosa_attuale = [c["nome"] for c in get_rosa(squadra["id"])]
+
+            rosa_lock, deadline_rosa = rosa_bloccata()
+            if deadline_rosa and not rosa_lock:
+                components.html(countdown_html(deadline_rosa, "⏳ Chiusura mercato tra"), height=56)
+
+            if rosa_lock:
+                st.error(f"⛔ Mercato chiuso il {deadline_rosa.strftime('%d/%m/%Y %H:%M')}: la rosa non è più modificabile.")
+            else:
+                scelte = st.multiselect(
+                    f"Scegli {COPPIE_PER_SQUADRA} coppie",
+                    options=list(nome_to_id.keys()),
+                    default=[n for n in rosa_attuale if n in nome_to_id],
+                    max_selections=COPPIE_PER_SQUADRA,
                 )
-                if st.button("✅ Conferma schieramento"):
-                    if formazione_bloccata():
-                        st.error("🔴 Formazione appena bloccata (fascia diretta): riprova più tardi.")
-                    elif len(titolari) != TITOLARI_PER_PUNTATA:
-                        st.error(f"Devi schierare esattamente {TITOLARI_PER_PUNTATA} coppie.")
+                if st.button("💾 Salva rosa"):
+                    if rosa_bloccata()[0]:
+                        st.error("⛔ Mercato appena chiuso: rosa non più modificabile.")
+                    elif len(scelte) != COPPIE_PER_SQUADRA:
+                        st.error(f"Devi scegliere esattamente {COPPIE_PER_SQUADRA} coppie.")
                     else:
-                        set_schieramento(squadra["id"], puntata["id"], [schierabili[n] for n in titolari])
-                        st.success("Schieramento confermato!")
+                        set_rosa(squadra["id"], [nome_to_id[n] for n in scelte])
+                        puntata_aperta = get_puntata_aperta()
+                        if puntata_aperta:
+                            auto_schieramento(squadra["id"], puntata_aperta["id"])
+                        st.success("Rosa salvata!")
                         st.rerun()
+
+            # mostra rosa con foto
+            rosa = get_rosa(squadra["id"])
+            if rosa:
+                cols = st.columns(len(rosa))
+                for col, c in zip(cols, rosa):
+                    with col:
+                        mostra_foto(c["nome"], width=90)
+                        etichetta = "❌ eliminata" if c["eliminata"] else f"{punti_coppia_totali(c['id'])} pt"
+                        st.caption(f"**{c['nome']}**\n\n{etichetta}")
+
+            st.divider()
+
+            # --- SCHIERAMENTO per la puntata aperta ---
+            st.subheader("🎯 Schiera i titolari")
+            puntata = get_puntata_aperta()
+
+            if not puntata:
+                st.warning("Nessuna puntata aperta: non puoi ancora schierare.")
+            elif not rosa:
+                st.info("Prima scegli la tua rosa di coppie qui sopra.")
+            else:
+                auto_schieramento(squadra["id"], puntata["id"])
+                st.write(f"📺 **Puntata {puntata['numero']}** — schiera {TITOLARI_PER_PUNTATA} coppie (non eliminate).")
+                schierabili = {c["nome"]: c["id"] for c in rosa if not c["eliminata"]}
+                gia_schierati = [c["nome"] for c in get_schieramento(squadra["id"], puntata["id"]) if c["nome"] in schierabili]
+
+                if formazione_bloccata():
+                    st.error("🔴 Formazione bloccata: non puoi cambiare i titolari ora.")
+                    forzata = get_impostazione("formazione_forzata", "0")
+                    if forzata != "1":
+                        components.html(
+                            countdown_html(prossimo_sblocco(), "🔓 Formazione modificabile di nuovo tra", "#7f1d1d"),
+                            height=56,
+                        )
+                    if gia_schierati:
+                        st.write("I tuoi titolari per questa puntata:")
+                        for n in gia_schierati:
+                            st.write(f"• {n}")
+                    else:
+                        st.caption("Non avevi schierato titolari per questa puntata.")
+                else:
+                    titolari = st.multiselect(
+                        "Titolari di questa puntata",
+                        options=list(schierabili.keys()),
+                        default=gia_schierati,
+                        max_selections=TITOLARI_PER_PUNTATA,
+                    )
+                    if st.button("✅ Conferma schieramento"):
+                        if formazione_bloccata():
+                            st.error("🔴 Formazione appena bloccata: riprova più tardi.")
+                        elif len(titolari) != TITOLARI_PER_PUNTATA:
+                            st.error(f"Devi schierare esattamente {TITOLARI_PER_PUNTATA} coppie.")
+                        else:
+                            set_schieramento(squadra["id"], puntata["id"], [schierabili[n] for n in titolari])
+                            st.success("Schieramento confermato!")
+                            st.rerun()
     except Exception as e:
         st.error("⚠️ Errore di connessione al database. Riprova tra qualche secondo.")
         st.caption(f"Dettaglio: {e}")
@@ -885,6 +945,7 @@ elif st.session_state.page == "admin":
             if not c["eliminata"]:
                 if col1.button("❌ Elimina dal gioco", key=f"elim_{c['id']}"):
                     execute("UPDATE coppie SET eliminata = 1 WHERE id = %s", (c["id"],))
+                    aggiorna_schieramenti_per_eliminazione(c["id"])
                     st.rerun()
             else:
                 if col1.button("♻️ Ripristina", key=f"rip_{c['id']}"):
@@ -939,10 +1000,17 @@ elif st.session_state.page == "admin":
         if st.button("Crea puntata"):
             try:
                 execute("INSERT INTO puntate (numero, aperta) VALUES (%s, 1)", (num,))
-                st.success(f"Puntata {num} creata e aperta!")
-                st.rerun()
             except Exception:
                 st.error("Esiste già una puntata con quel numero.")
+            else:
+                puntata_nuova = query("SELECT id FROM puntate WHERE numero = %s", (num,), one=True)
+                if puntata_nuova:
+                    try:
+                        auto_fill_tutte_squadre(puntata_nuova["id"])
+                    except Exception:
+                        pass
+                st.success(f"Puntata {num} creata e aperta!")
+                st.rerun()
 
         st.divider()
         st.subheader("Puntate")
@@ -952,7 +1020,10 @@ elif st.session_state.page == "admin":
             col1.write(f"📺 **Puntata {p['numero']}** — {stato}")
             label = "Chiudi" if p["aperta"] else "Riapri"
             if col2.button(label, key=f"pun_{p['id']}"):
-                execute("UPDATE puntate SET aperta = %s WHERE id = %s", (0 if p["aperta"] else 1, p["id"]))
+                nuovo_stato = 0 if p["aperta"] else 1
+                execute("UPDATE puntate SET aperta = %s WHERE id = %s", (nuovo_stato, p["id"]))
+                if nuovo_stato == 1:
+                    auto_fill_tutte_squadre(p["id"])
                 st.rerun()
             with col3.expander("🗑️ Cancella"):
                 st.caption("Cancella la puntata e **tutti i punti assegnati**. Irreversibile.")
@@ -999,6 +1070,27 @@ elif st.session_state.page == "admin":
             st.rerun()
         stato = "🔴 BLOCCATA adesso" if formazione_bloccata() else "🟢 modificabile adesso"
         st.write(f"Stato formazione in questo momento: **{stato}**")
+
+        st.divider()
+        st.subheader("🎛️ Controllo manuale")
+        st.caption("Blocca o sblocca la formazione istantaneamente, indipendentemente dalla fascia oraria.")
+        forzata = get_impostazione("formazione_forzata", "0")
+        if forzata == "1":
+            st.error("🔴 Formazione **bloccata manualmente**.")
+        elif forzata == "-1":
+            st.success("🟢 Formazione **sbloccata manualmente**.")
+        else:
+            st.info("⚙️ Modalità automatica (basata sulla fascia oraria).")
+        col_bl, col_unbl, col_auto = st.columns(3)
+        if col_bl.button("🔴 Blocca adesso"):
+            set_impostazione("formazione_forzata", "1")
+            st.rerun()
+        if col_unbl.button("🟢 Sblocca adesso"):
+            set_impostazione("formazione_forzata", "-1")
+            st.rerun()
+        if col_auto.button("↩️ Torna automatico"):
+            set_impostazione("formazione_forzata", "0")
+            st.rerun()
 
     # --- ASSEGNA PUNTI (griglia coppie x eventi) ---
     with tab_punti:
